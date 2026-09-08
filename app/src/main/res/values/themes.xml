@@ -1,0 +1,13 @@
+<resources>
+    <style name="Theme.TimeCostView" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="colorPrimary">#D6FF3F</item>
+        <item name="colorOnPrimary">#11120F</item>
+        <item name="colorSecondary">#D6FF3F</item>
+        <item name="android:statusBarColor">#11120F</item>
+        <item name="android:navigationBarColor">#11120F</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowBackground">#11120F</item>
+        <item name="android:colorAccent">#D6FF3F</item>
+    </style>
+</resources>

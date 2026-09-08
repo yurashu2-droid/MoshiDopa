@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original TIME COST vector asset; no external artwork or runtime download. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="76dp"
+    android:height="76dp"
+    android:viewportWidth="76"
+    android:viewportHeight="76">
+    <path
+        android:fillColor="#6B3F2A"
+        android:pathData="M12,18 L58,12 L66,22 L60,61 L16,66 L9,55 Z" />
+    <path
+        android:fillColor="#9A6040"
+        android:pathData="M12,18 L58,12 L66,22 L20,29 Z" />
+    <path
+        android:fillColor="#D8A06A"
+        android:pathData="M21,31 L32,30 L31,42 L20,43 Z M36,29 L47,28 L46,40 L35,41 Z M51,27 L61,26 L59,38 L50,39 Z M19,48 L30,47 L29,59 L18,60 Z M34,46 L45,45 L44,57 L33,58 Z M49,44 L59,43 L57,55 L48,56 Z" />
+</vector>
