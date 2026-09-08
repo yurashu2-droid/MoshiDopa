@@ -17,10 +17,7 @@ import android.os.*
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
-import android.view.VelocityTracker
-import android.view.ViewConfiguration
 import android.view.animation.PathInterpolator
 import android.widget.*
 import androidx.core.view.ViewCompat
@@ -43,6 +40,8 @@ import com.example.timecostview.share.ReceiptRenderer
 import com.example.timecostview.share.SessionReceiptRenderer
 import com.example.timecostview.tracking.Access
 import com.example.timecostview.tracking.TrackingService
+import com.example.timecostview.ui.PageUi
+import com.example.timecostview.ui.history.HistoryScreen
 import com.example.timecostview.ui.Brand
 import com.example.timecostview.ui.SessionReceiptPalette
 import com.example.timecostview.ui.SessionReceiptPaperView
@@ -50,131 +49,14 @@ import com.example.timecostview.domain.SessionReceiptBuilder
 import dev.liquidglass.view.LiquidGlassProviderLayout
 import dev.liquidglass.view.LiquidGlassView
 import com.google.android.material.switchmaterial.SwitchMaterial
-import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.YearMonth
-import java.time.temporal.ChronoUnit
-import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private class HistoryScrollView(context: Context) : HorizontalScrollView(context) {
-    private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-    private var downX = 0f
-    private var downY = 0f
-    private var startScrollX = 0
-    private var downTimeMs = 0L
-    private var dragged = false
-    private var velocityTracker: VelocityTracker? = null
-    private var settleAnimator: ValueAnimator? = null
-
-    var onGestureSettled: ((wasDragged: Boolean, velocityX: Float, durationMs: Long, distancePx: Float) -> Unit)? = null
-
-    private fun beginGesture(event: MotionEvent) {
-        settleAnimator?.cancel()
-        settleAnimator = null
-        downX = event.x
-        downY = event.y
-        startScrollX = scrollX
-        downTimeMs = event.eventTime
-        dragged = false
-        velocityTracker?.recycle()
-        velocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
-    }
-
-    override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
-        if(event.actionMasked == MotionEvent.ACTION_DOWN) beginGesture(event)
-        if(event.actionMasked == MotionEvent.ACTION_MOVE) {
-            val dx = event.x - downX
-            val dy = event.y - downY
-            if(abs(dx) > touchSlop && abs(dx) > abs(dy)) {
-                dragged = true
-                return true
-            }
-        }
-        return false
-    }
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        when(event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> beginGesture(event)
-            MotionEvent.ACTION_MOVE -> {
-                velocityTracker?.addMovement(event)
-                dragged = dragged || abs(event.x - downX) > touchSlop
-                val maxScroll = ((getChildAt(0)?.measuredWidth ?: 0) - width).coerceAtLeast(0)
-                scrollTo((startScrollX + (downX - event.x).roundToInt()).coerceIn(0, maxScroll), 0)
-            }
-            MotionEvent.ACTION_UP -> {
-                velocityTracker?.addMovement(event)
-                val tracker = velocityTracker
-                tracker?.computeCurrentVelocity(1000)
-                val velocityX = tracker?.xVelocity ?: 0f
-                val durationMs = (event.eventTime - downTimeMs).coerceAtLeast(0L)
-                val wasDragged = dragged
-                onGestureSettled?.invoke(wasDragged, velocityX, durationMs, abs(event.x - downX))
-                tracker?.recycle()
-                velocityTracker = null
-            }
-            MotionEvent.ACTION_CANCEL -> {
-                velocityTracker?.recycle()
-                velocityTracker = null
-            }
-        }
-        return true
-    }
-
-    /** Slow drags should settle where the finger leaves them; fast swipes are handled by the screen. */
-    override fun fling(velocityX: Int) = Unit
-
-    fun settleTo(targetX: Int, onSettled: () -> Unit) {
-        settleAnimator?.cancel()
-        val startX = scrollX
-        if(startX == targetX) {
-            onSettled()
-            return
-        }
-        var cancelled = false
-        settleAnimator = ValueAnimator.ofInt(startX, targetX).apply {
-            duration = (150L + abs(targetX - startX) / 5L).coerceIn(170L, 280L)
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
-            addUpdateListener { scrollTo(it.animatedValue as Int, 0) }
-            addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationCancel(animation: Animator) { cancelled = true }
-                override fun onAnimationEnd(animation: Animator) {
-                    settleAnimator = null
-                    if(!cancelled) onSettled()
-                }
-            })
-            start()
-        }
-    }
-
-    override fun onDetachedFromWindow() {
-        settleAnimator?.cancel()
-        velocityTracker?.recycle()
-        velocityTracker = null
-        super.onDetachedFromWindow()
-    }
-}
-
 private fun historyWeekStart(day: LocalDate): LocalDate =
     HistoryWindow.weekStart(day)
-
-private fun historyDateLabel(day: LocalDate): String {
-    val weekdays = arrayOf("日", "月", "火", "水", "木", "金", "土")
-    return "${day.monthValue}/${day.dayOfMonth}（${weekdays[day.dayOfWeek.value % 7]}）"
-}
-
-private fun historyDateShortLabel(day: LocalDate): String {
-    val weekdays = arrayOf("日", "月", "火", "水", "木", "金", "土")
-    return "${day.monthValue}/${day.dayOfMonth}\n${weekdays[day.dayOfWeek.value % 7]}"
-}
-
-private fun historyPickerLabel(day: LocalDate): String {
-    val prefix = if(day == LocalDate.now()) "今日・" else ""
-    return "$prefix${day.monthValue}月${day.dayOfMonth}日（${arrayOf("日", "月", "火", "水", "木", "金", "土")[day.dayOfWeek.value % 7]}）  ⌄"
-}
 
 class MainActivity : ComponentActivity() {
     companion object { @Volatile var isVisible = false; private set }
@@ -341,37 +223,15 @@ class MainActivity : ComponentActivity() {
             handler.postDelayed(this, 100)
         }
     }
-    private fun text(value: String, size: Float = 15f, color: Int = ink, bold: Boolean = false) = TextView(this).apply {
-        text = value; textSize = size; setTextColor(color); setLineSpacing(dp(4).toFloat(), 1f)
-        if(bold) typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-    }
-    private fun space(height: Int = 20) { page.addView(View(this), LinearLayout.LayoutParams(1, dp(height))) }
-    private fun label(value: String) { page.addView(text(value, 12f, muted, true)) }
-    private fun paragraph(value: String) { page.addView(text(value, 14f, muted)) }
-    private fun button(value: String, primary: Boolean = false, action: () -> Unit): Button = Button(this).apply {
-        text = value; isAllCaps = false; textSize = 16f; setTextColor(if(primary) Brand.background else ink)
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        val shape = GradientDrawable().apply { setColor(if(primary) accent else Brand.surface); cornerRadius = dp(24).toFloat() }
-        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(if(primary) 0x33000000 else 0x33ffffff), shape, null)
-        minHeight = dp(60); setPadding(dp(20), dp(14), dp(20), dp(14))
-        setOnClickListener { action() }
-        layoutParams = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) }
-    }
-    private fun field(hintValue: String, value: String, numeric: Boolean = false) = EditText(this).apply {
-        hint = hintValue; setText(value); textSize = 22f; setTextColor(ink); setHintTextColor(muted)
-        inputType = if(numeric) InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL else InputType.TYPE_CLASS_TEXT
-        setSingleLine(); minHeight = dp(60)
-        setPadding(dp(18), dp(16), dp(18), dp(16))
-        background = GradientDrawable().apply { setColor(Brand.surface); cornerRadius = dp(20).toFloat(); setStroke(dp(1), 0xff515646.toInt()) }
-        filters = arrayOf(android.text.InputFilter.LengthFilter(if(numeric) 14 else 60))
-    }
-    private fun bigMoney(value: String): PayslipAmount = PayslipAmount(this).apply {
-        text = value; textSize = 60f; setTextColor(ink)
-        typeface = Typeface.create("sans-serif", Typeface.BOLD)
-        setSingleLine(); androidx.core.widget.TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(this, 22, 64, 1, android.util.TypedValue.COMPLEX_UNIT_SP)
-        fontFeatureSettings = "tnum"; minHeight = dp(105)
-    }
-    private fun line() { page.addView(View(this).apply { setBackgroundColor(0xff3b3f32.toInt()) }, LinearLayout.LayoutParams(-1, dp(1)).apply { topMargin = dp(24); bottomMargin = dp(24) }) }
+    private val pageUi get() = PageUi(this, page)
+    private fun text(value: String, size: Float = 15f, color: Int = ink, bold: Boolean = false) = pageUi.text(value, size, color, bold)
+    private fun space(height: Int = 20) = pageUi.space(height)
+    private fun label(value: String) = pageUi.label(value)
+    private fun paragraph(value: String) = pageUi.paragraph(value)
+    private fun button(value: String, primary: Boolean = false, action: () -> Unit) = pageUi.button(value, primary, action)
+    private fun field(hintValue: String, value: String, numeric: Boolean = false) = pageUi.field(hintValue, value, numeric)
+    private fun bigMoney(value: String) = pageUi.bigMoney(value)
+    private fun line() = pageUi.line()
     private fun render() {
         amountView = null; elapsedView = null; activityView = null
         todayView = null
@@ -964,165 +824,32 @@ class MainActivity : ComponentActivity() {
         }.start()
     }
     private fun history() {
-        val days = com.example.timecostview.domain.HistorySummary.days(store.records())
-        val visibleDates = (0..6).map { historyAnchorDay.plusDays(it.toLong()) }
-        if(historyDay.isBefore(visibleDates.first()) || historyDay.isAfter(visibleDates.last())) {
-            historyDay = visibleDates.first()
+        if(historyDay.isBefore(historyAnchorDay) || historyDay.isAfter(historyAnchorDay.plusDays(6))) {
+            historyDay = historyAnchorDay
         }
-        val records = days[historyDay].orEmpty()
-        val selectedAmount = records.sumOf { it.amount }
-
-        page.addView(text("その日、\n働いていたら。", 32f, ink, true)); space(6)
-        // The selected day's amount is the first thing the eye meets, before the chart.
-        page.addView(bigMoney(Cost.money(selectedAmount)))
-        paragraph("合計 ${Cost.time(records.sumOf { it.duration })}  ·  ${records.size}件")
-        space(10)
-
-        val dateButton = text(historyPickerLabel(historyDay), 13f, ink, true).apply {
-            gravity = Gravity.CENTER
-            minHeight = dp(44)
-            setPadding(dp(14), dp(7), dp(14), dp(7))
-            isClickable = true
-            isFocusable = true
-            contentDescription = "カレンダーを開く。選択中は${historyDateLabel(historyDay)}"
-            background = android.graphics.drawable.RippleDrawable(
-                ColorStateList.valueOf(0x2bffffff),
-                null,
-                GradientDrawable().apply {
-                    setColor(Color.WHITE)
-                    cornerRadius = dp(22).toFloat()
-                },
-            )
-            setOnClickListener {
-                android.app.DatePickerDialog(this@MainActivity, { _, y, m, d ->
-                    val selected = LocalDate.of(y, m + 1, d)
-                    historyDay = selected
-                    if(selected.isBefore(historyAnchorDay) || selected.isAfter(historyAnchorDay.plusDays(6))) {
-                        historyAnchorDay = historyWeekStart(selected)
-                    }
-                    expandedGroup = null
-                    render()
-                }, historyDay.year, historyDay.monthValue - 1, historyDay.dayOfMonth).apply {
-                    datePicker.maxDate = System.currentTimeMillis()
-                }.show()
-            }
-        }
-        page.addView(dateButton, LinearLayout.LayoutParams(-2, dp(44)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        })
-
-        // A broad off-screen buffer keeps direct manipulation continuous while
-        // still allowing a fast gesture to settle on a calendar-week boundary.
-        val chartScroll = HistoryScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-        }
-        val chart = LinearLayout(this).apply { gravity = Gravity.BOTTOM }
-        val chartStart = historyAnchorDay.minusDays(14)
-        val chartDates = (0..34).map { chartStart.plusDays(it.toLong()) }
-        val maximum = chartDates.maxOf { day -> days[day].orEmpty().sumOf { it.amount } }.coerceAtLeast(1.0)
-        val columnWidth = dp(44)
-        chartDates.forEach { day ->
-            val total = days[day].orEmpty().sumOf { it.amount }
-            val column = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                minimumWidth = columnWidth; isClickable = true; isFocusable = true
-                contentDescription = "$day、${Cost.money(total)}"; isSelected = day == historyDay
-                val track = FrameLayout(this@MainActivity)
-                track.addView(View(this@MainActivity).apply {
-                    background = GradientDrawable().apply {
-                        setColor(if(day == historyDay) accent else 0xff78834f.toInt())
-                        cornerRadius = dp(6).toFloat()
-                    }
-                }, FrameLayout.LayoutParams(
-                    dp(24),
-                    if(total > 0) dp((total / maximum * 90).toInt().coerceIn(3, 90)) else dp(1),
-                    Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
-                ))
-                addView(track, LinearLayout.LayoutParams(-1, dp(100)))
-                addView(text(historyDateShortLabel(day), 11f, if(day == historyDay) accent else muted).apply { gravity = Gravity.CENTER })
-                setOnClickListener {
-                    historyDay = day
-                    if(day.isBefore(historyAnchorDay)) historyAnchorDay = day
-                    if(day.isAfter(historyAnchorDay.plusDays(6))) historyAnchorDay = day.minusDays(6)
-                    expandedGroup = null
-                    render()
-                }
-            }
-            chart.addView(column, LinearLayout.LayoutParams(columnWidth, dp(136)))
-        }
-        chartScroll.addView(chart, LinearLayout.LayoutParams(-2, dp(152)))
-        page.addView(chartScroll, LinearLayout.LayoutParams(-1, dp(152)))
-        chartScroll.post { chartScroll.scrollTo(columnWidth * 14, 0) }
-
-        chartScroll.onGestureSettled = { wasDragged, velocityX, durationMs, distancePx ->
-            if(wasDragged) {
-                chartScroll.post {
-                    if(isFinishing || isDestroyed) return@post
-                    val nearestIndex = (chartScroll.scrollX.toFloat() / columnWidth)
-                        .roundToInt()
-                        .coerceIn(0, chartDates.size - 7)
-                    val nearestStart = chartStart.plusDays(nearestIndex.toLong())
-                    val requestedAnchor = HistoryWindow.settleAnchor(
-                        nearestVisibleStart = nearestStart,
-                        velocityX = velocityX,
-                        durationMs = durationMs,
-                        distancePx = distancePx,
-                        columnWidthPx = columnWidth,
-                        fastVelocityPx = 900,
-                    )
-                    val targetIndex = ChronoUnit.DAYS.between(chartStart, requestedAnchor)
-                        .toInt()
-                        .coerceIn(0, chartDates.size - 7)
-                    val targetAnchor = chartStart.plusDays(targetIndex.toLong())
-                    chartScroll.settleTo(targetIndex * columnWidth) {
-                        if(isFinishing || isDestroyed) return@settleTo
-                        historyAnchorDay = targetAnchor
-                        val end = historyAnchorDay.plusDays(6)
-                        if(historyDay.isBefore(historyAnchorDay)) historyDay = historyAnchorDay
-                        if(historyDay.isAfter(end)) historyDay = end
-                        expandedGroup = null
-                        render()
-                    }
-                }
-            }
-        }
-
-        space(16)
-        label("この日の記録")
-        if(records.isEmpty()) { space(24); paragraph("この日の記録はありません。日付を選んで確認できます。") }
-        com.example.timecostview.domain.HistorySummary.groups(records).forEach { group ->
-            val expanded = expandedGroup == group.key
-            page.addView(button("${if(expanded) "▾" else "▸"} ${group.title}  ·  ${modeLabel(group.mode)}\n${Cost.money(group.amount)}  /  ${Cost.time(group.duration)}  /  ${group.records.size}回") {
-                expandedGroup = if(expanded) null else group.key; render()
-            })
-            if(expanded) {
-                page.addView(button("このアプリの1日分を共有") {
-                    val hide = CheckBox(this).apply { text = "時間を隠す"; isChecked = true; setPadding(dp(24), dp(12), dp(24), dp(12)) }
-                    AlertDialog.Builder(this).setTitle("1日分の明細を共有").setView(hide)
-                        .setMessage("時間と金額を両方載せると、計算に使った時給を推測できます。")
-                        .setPositiveButton("共有") { _, _ ->
-                            runCatching { ReceiptRenderer.share(this, StatementBuilder.group(group.records, StatementPeriod.DAY, group.mode), hide.isChecked) }.onFailure { toast("共有できませんでした") }
-                        }.setNegativeButton("キャンセル", null).show()
-                })
-                group.records.forEach { r ->
-                    page.addView(button("${date(r.start)}  ·  ${Cost.time(r.duration)}\n${Cost.money(r.amount)}  明細を見る") {
-                        result = r; statement = null; tab = "result"; render()
-                    })
-                }
-            }
-        }
-        page.addView(button("日給・月給明細を作る") {
-            statementDay = historyDay
-            historyMonth = YearMonth.from(historyDay)
-            historyPeriod = StatementPeriod.DAY
-            historyMode = mode
-            statementProject = ""
-            statement = null
-            tab = "statements"
-            render()
-        })
-        space(16); paragraph("日をまたぐ記録は日別に分けて表示します。金額はそれぞれの記録に保存された時給で計算します。")
+        HistoryScreen(
+            context = this,
+            page = page,
+            sourceRecords = store.records(),
+            historyDay = historyDay,
+            historyAnchorDay = historyAnchorDay,
+            expandedGroup = expandedGroup,
+            onSelectWindow = { day, anchor ->
+                historyDay = day; historyAnchorDay = anchor; expandedGroup = null; render()
+            },
+            onExpandGroup = { expandedGroup = it; render() },
+            onOpenRecord = { result = it; statement = null; tab = "result"; render() },
+            onComposeStatement = { day ->
+                statementDay = day
+                historyMonth = YearMonth.from(day)
+                historyPeriod = StatementPeriod.DAY
+                historyMode = mode
+                statementProject = ""
+                statement = null
+                tab = "statements"
+                render()
+            },
+        ).render()
     }
 
     /** Statements are an optional destination; history keeps its original chart and gestures. */
@@ -1360,7 +1087,6 @@ class MainActivity : ComponentActivity() {
         tab = "history"
         history()
     }
-    private fun date(time: Long) = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN).format(Date(time))
     private fun toast(message: String) { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
     private fun launchSettings(intent: Intent) {
         runCatching { startActivity(intent) }.onFailure { toast("端末の設定から権限を変更してください") }

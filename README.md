@@ -17,6 +17,8 @@
 
 ## 今回の構成
 
+セッション処理・履歴画面の責務分離については [設計判断と検証状況](docs/refactoring.md) を参照してください。
+
 - Kotlin / Android標準View。既存の非Composeひな形を維持し、大規模な依存更新は行っていません。
 - minSdk 28。compileSdk 36.1 / targetSdk 36 / AGP 9.0.1は既存設定。
 - `domain/Cost.kt`: 給与換算、経過時間からの金額算出、表示形式。

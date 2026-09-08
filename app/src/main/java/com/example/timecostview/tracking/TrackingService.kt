@@ -12,7 +12,7 @@ import com.example.timecostview.data.Store
 import com.example.timecostview.domain.Cost
 import com.example.timecostview.domain.MoneyDropScheduler
 import com.example.timecostview.domain.Record
-import com.example.timecostview.domain.splitAtMidnight
+import com.example.timecostview.domain.TrackingSession
 import com.example.timecostview.domain.CompletionGate
 import com.example.timecostview.overlay.PriceTag
 import com.example.timecostview.overlay.SessionReceiptOverlay
@@ -35,9 +35,7 @@ class TrackingService : Service() {
     private lateinit var tag: PriceTag
     private lateinit var receiptOverlay: SessionReceiptOverlay
     private val handler = Handler(Looper.getMainLooper())
-    private var active: Record? = null
-    private var startMono = 0L
-    private var base = 0.0
+    private lateinit var session: TrackingSession
     private var manual = false
     private var foreground: String? = null
     private var lastPoll = 0L
@@ -59,7 +57,7 @@ class TrackingService : Service() {
         }
     }
     override fun onCreate() {
-        super.onCreate(); store = Store(this); tag = PriceTag(this)
+        super.onCreate(); store = Store(this); session = TrackingSession(store); tag = PriceTag(this)
         receiptOverlay = SessionReceiptOverlay(this) { completion.dismiss() }
         registerReceiver(screenReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF))
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("tracking", "時間の金額表示", NotificationManager.IMPORTANCE_LOW))
@@ -110,19 +108,11 @@ class TrackingService : Service() {
         note: String = "",
     ) {
         val r = Record(0, app, title, mode, wall, wall, 0, store.rate, project, category, note)
-        active = r.copy(id = store.save(r)); startMono = mono
-        base = store.today(app, wall, active!!.id)
-        dropScheduler.reset(active!!.id, currentAmount = 0.0, nowMs = mono)
+        session.begin(r, mono)
+        dropScheduler.reset(requireNotNull(session.active).id, currentAmount = 0.0, nowMs = mono)
     }
     private fun finishSegment(wall: Long, mono: Long): Record? {
-        val r = active ?: return null
-        val result = r.copy(end = wall.coerceAtLeast(r.start), duration = (mono - startMono).coerceAtLeast(0))
-        if(manual) store.update(r.id, result.end, result.duration) else {
-            splitAtMidnight(result).forEachIndexed { index, part ->
-                if(index == 0) store.update(r.id, part.end, part.duration) else store.save(part)
-            }
-        }
-        active = null
+        val result = session.finish(wall, mono, manual) ?: return null
         dropScheduler.clear()
         tag.clearDropAnimation()
         return result
@@ -211,21 +201,21 @@ class TrackingService : Service() {
                     notifiedCompletionId = it.id
                 }
                 screenAvailable = visible
-                var r = active
+                var r = session.active
                 if(r != null && !manual) {
                     val zone = ZoneId.systemDefault()
                     val nextDay = Instant.ofEpochMilli(r.start).atZone(zone).toLocalDate().plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
                     if(now >= nextDay) {
                         val boundaryMono = mono - (now - nextDay)
                         finishSegment(nextDay, boundaryMono)
-                        begin(r.app, r.title, r.mode, nextDay, boundaryMono); r = active
+                        begin(r.app, r.title, r.mode, nextDay, boundaryMono); r = session.active
                     }
                 }
                 if(r != null) {
-                    val elapsed = (mono - startMono).coerceAtLeast(0)
+                    val elapsed = session.elapsed(mono)
                     val amount = Cost.yen(elapsed, r.rate)
-                    state = LiveState(true, manual, r.title, r.mode, elapsed, amount, base + amount, lastCompleted)
-                    if(now - lastSave >= 5000) { store.update(r.id, now, elapsed); lastSave = now }
+                    state = LiveState(true, manual, r.title, r.mode, elapsed, amount, session.todayBase + amount, lastCompleted)
+                    if(now - lastSave >= 5000) { session.checkpoint(now, mono); lastSave = now }
                     val milestonesEnabled = store.prefs.getBoolean("milestones", true)
                     val motionEnabled = store.prefs.getBoolean("motion", true)
                     val overlayVisible = visible && !MainActivity.isVisible && Settings.canDrawOverlays(this@TrackingService)
@@ -240,7 +230,7 @@ class TrackingService : Service() {
                     ) else null
                     if(overlayVisible) {
                         receiptOverlay.hide()
-                        tag.show("${r.title} · 今回", Cost.money(amount), Cost.money(base + amount), spend = r.mode == "SPEND", motion = motionEnabled)
+                        tag.show("${r.title} · 今回", Cost.money(amount), Cost.money(session.todayBase + amount), spend = r.mode == "SPEND", motion = motionEnabled)
                         if(!milestonesEnabled) tag.clearDropAnimation()
                         drop?.let { tag.drop(it.item, motionEnabled) }
                     } else tag.hide()
